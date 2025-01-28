@@ -108,7 +108,7 @@ int create_send_socket(const char *ip_address, bool is_sending_connection_reques
 int create_receive_socket(const char *ip_address, bool is_sending_connection_request)
 {
     return create_socket(ip_address, PORT2, is_sending_connection_request);
-}   
+}
 
 bool should_drop_frame(long long &frame_timestamp)
 {
@@ -232,11 +232,12 @@ int main(int argc, char *argv[])
     std::cout << "connection_mode: " << is_sending_connection_request << std::endl;
     int send_socket = create_send_socket(ip_address, is_sending_connection_request);
     int receive_socket = create_receive_socket(ip_address, is_sending_connection_request);
-    if (send_socket != 1 && receive_socket != 1) {
-    std::thread send_thread(send_data, send_socket);
-    std::thread receive_thread(receive_data, receive_socket);
-    send_thread.join();
-    receive_thread.join();
+    if (send_socket != 1 && receive_socket != 1)
+    {
+        std::thread send_thread(send_data, send_socket);
+        std::thread receive_thread(receive_data, receive_socket);
+        send_thread.join();
+        receive_thread.join();
     }
     close(send_socket);
     close(receive_socket);
