@@ -6,19 +6,46 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#define ROWS 280
-#define COLS 360
+/*
+    creating sharded buffer might help with contentions.
+    create buffer_0, buffer_1, buffer_2 .... buffer_15.
+    add each frame to the corresponding buffer according to sequence_num % 16.
+    while sending, loop through each buffer and send one element.
+*/
+
+#define ROWS 25
+#define COLS 25
 #define CHANNELS 3 // RGB.
 #define PORT1 50001
 #define PORT2 50002
-#define IP "127.0.0.1"
 #define ACCEPTABLE_DELAY_IN_MS 100
+#define BATCH_SIZE 1400
 
-struct frame {
-    const unsigned char raw_data[ROWS * COLS * CHANNELS];
+struct frame
+{
+    unsigned char raw_data[ROWS * COLS * CHANNELS];
     long long timestamp;
     long long sequence_num;
+
+    bool operator<(const frame &other_frame) const
+    {
+        return sequence_num < other_frame.sequence_num;
+    }
+
+    frame() {}
 };
+
+struct channel
+{
+    int socket;
+    const char *ip_address;
+    int port_number;
+};
+
+void close_channel(channel c)
+{
+    close(c.socket);
+}
 
 long long timenow_ms()
 {
@@ -27,134 +54,64 @@ long long timenow_ms()
     return duration.count();
 }
 
-int create_socket(const char *ip_address, int port_number, bool is_sending_connection_request)
+int create_socket(const char *ip_address, int binding_port_number)
 {
-    if (is_sending_connection_request)
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    // bind the socket to the port.
+    struct sockaddr_in my_address;
+    memset(&my_address, 0, sizeof(my_address));
+    my_address.sin_family = AF_INET;
+    my_address.sin_port = htons(binding_port_number);
+    my_address.sin_addr.s_addr = INADDR_ANY;
+    if (bind(sockfd, (struct sockaddr *)&my_address, sizeof(my_address)) == -1)
     {
-        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (sockfd == -1)
-        {
-            std::cerr << "error: socket creation failed!" << std::endl;
-            return 1;
-        }
-
-        // specify the peer address.
-        struct sockaddr_in peer_address;
-        memset(&peer_address, 0, sizeof(ip_address));
-        peer_address.sin_family = AF_INET; // ipv4.
-        peer_address.sin_port = htons(port_number);
-
-        // convert IP address from text to binary.
-        if (inet_pton(AF_INET, ip_address, &peer_address.sin_addr) <= 0)
-        {
-            std::cerr << "invalid IP address!" << std::endl;
-            close(sockfd);
-            return 1;
-        }
-
-        // connect to the server.
-        if (connect(sockfd, (struct sockaddr *)&peer_address, sizeof(peer_address)) == -1)
-        {
-            std::cerr << "connection failed!" << std::endl;
-            close(sockfd);
-            return 1;
-        }
-        std::cout << "connected!" << std::endl;
-        return sockfd;
+        std::cerr << "error: failed to bind socket!" << std::endl;
+        return -1;
     }
-    else
-    {
-        int listener_sock, connection_sock;
-        struct sockaddr_in my_address, peer_address;
-        socklen_t peer_address_len = sizeof(peer_address);
-
-        listener_sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (listener_sock < 0)
-        {
-            std::cerr << "failed creating socket to listen!" << std::endl;
-            return 1;
-        }
-
-        memset(&my_address, 0, sizeof(my_address));
-        my_address.sin_family = AF_INET;
-        my_address.sin_addr.s_addr = INADDR_ANY;
-        my_address.sin_port = htons(port_number);
-
-        if (bind(listener_sock, (struct sockaddr *)&my_address, sizeof(my_address)) < 0)
-        {
-            std::cerr << "failed binding socket!" << std::endl;
-            close(listener_sock);
-            return 1;
-        }
-
-        if (listen(listener_sock, 1) < 0)
-        {
-            std::cerr << "failed listening for connections!" << std::endl;
-            close(listener_sock);
-            return 1;
-        }
-
-        connection_sock = accept(listener_sock, (struct sockaddr *)&peer_address, &peer_address_len);
-        if (connection_sock < 0)
-        {
-            std::cerr << "failed accepting connection!\n";
-            close(listener_sock);
-        }
-
-        close(listener_sock);
-
-        return connection_sock;
-    }
+    return sockfd;
 }
 
-int create_send_socket(const char *ip_address, bool is_sending_connection_request)
+channel create_send_socket(const char *ip_address, bool use_low_port_for_sending)
 {
-    return create_socket(ip_address, PORT1, is_sending_connection_request);
+    int sockfd = create_socket(ip_address, use_low_port_for_sending ? PORT1 : PORT2);
+    return {sockfd, ip_address, PORT2};
 }
 
-int create_receive_socket(const char *ip_address, bool is_sending_connection_request)
+channel create_receive_socket(const char *ip_address, bool use_low_port_for_sending)
 {
-    return create_socket(ip_address, PORT2, is_sending_connection_request);
+    int sockfd = create_socket(ip_address, use_low_port_for_sending ? PORT2 : PORT1);
+    return {sockfd, ip_address, /*port_number=*/0}; // port number is irrelevant for receiving socket.
 }
 
-bool should_drop_frame(long long &frame_timestamp)
+bool should_drop_frame(const frame *f, const long long &last_processed_seq_num)
 {
-    return (timenow_ms() - frame_timestamp) < ACCEPTABLE_DELAY_IN_MS;
+    return (f->sequence_num < last_processed_seq_num) || ((timenow_ms() - f->timestamp) > ACCEPTABLE_DELAY_IN_MS);
 }
 
-void receive_data(int socket)
+void receive_data(const channel &c)
 {
-    std::cout << "started receiveing: " << std::endl;
-    // create a window
     cv::namedWindow("bimba", cv::WINDOW_NORMAL);
-    size_t raw_data_size = 13;
-    size_t raw_data_received = 0;
-    size_t receive_chunk = 5000;
-    unsigned char raw_data[raw_data_size];
-    long long timestamp;
-    std::cout << "initialized!..." << std::endl;
-
+    char final_buffer[ROWS * COLS * CHANNELS + sizeof(long long) * 2];
+    struct sockaddr_in peer_address;
+    socklen_t peer_address_len = sizeof(peer_address);
+    long long last_processed_seq_num = -1;
     while (1)
     {
-        // receive raw data.
-        while (raw_data_received < raw_data_size)
-        {
-            size_t chunk_size = (raw_data_received + receive_chunk) < raw_data_size ? receive_chunk : (raw_data_size - raw_data_received);
-            ssize_t bytes_received_1 = recv(socket, raw_data + raw_data_received, chunk_size, 0);
-            raw_data_received += bytes_received_1;
-        }
-        // receive timestamp.
-        ssize_t bytes_received_2 = recv(socket, &timestamp, sizeof(timestamp), 0);
-
-        // check if received frame is delayed more than the threshold.
-        if (should_drop_frame(timestamp))
+        ssize_t bytes_received = recvfrom(c.socket, final_buffer, sizeof(final_buffer), 0,
+                                     (struct sockaddr*)&peer_address, &peer_address_len);
+        frame f;
+        memcpy(f.raw_data, final_buffer, ROWS * COLS * CHANNELS);
+        memcpy(&f.timestamp, final_buffer + ROWS * COLS * CHANNELS, sizeof(long long));
+        memcpy(&f.sequence_num, final_buffer + ROWS * COLS * CHANNELS + sizeof(long long), sizeof(long long));
+                  
+        if (should_drop_frame(&f, last_processed_seq_num))
         {
             std::cout << "dropped!" << std::endl;
             continue;
         }
 
         std::cout << "not dropped!" << std::endl;
-        cv::Mat received_frame(ROWS, COLS, CV_8UC3, (void *)raw_data);
+        cv::Mat received_frame(ROWS, COLS, CV_8UC3, (void *)f.raw_data);
 
         // display the frame.
         cv::imshow("bimba", received_frame);
@@ -165,35 +122,38 @@ void receive_data(int socket)
             std::cout << "exiting..." << std::endl;
             break;
         }
+        last_processed_seq_num = f.sequence_num;
     }
     cv::destroyAllWindows();
 }
 
-void send_frame(int socket, const unsigned char *raw_data, const long long &timestamp)
+void send_frame(const channel &c, const frame *f)
 {
-    // send raw data,
-    if (send(socket, raw_data, ROWS * COLS * CHANNELS, 0) == -1)
-    {
-        std::cerr << "error: failed to send frame!" << std::endl;
-        return;
-    }
-    // send timestamp.
-    if (send(socket, &timestamp, sizeof(timestamp), 0) == -1)
-    {
-        std::cerr << "error: failed to send timestamp!" << std::endl;
-        return;
-    }
+    struct sockaddr_in peer_address;
+    memset(&peer_address, 0, sizeof(peer_address));
+    peer_address.sin_family = AF_INET;
+    peer_address.sin_port = htons(c.port_number);
+    inet_pton(AF_INET, c.ip_address, &peer_address.sin_addr); // Remote IP address (localhost)
+
+    char final_buffer[ROWS * COLS * CHANNELS + sizeof(long long) * 2];
+    memcpy(final_buffer, f->raw_data, ROWS * COLS * CHANNELS);
+    memcpy(final_buffer + ROWS * COLS * CHANNELS, &f->timestamp, sizeof(long long));
+    memcpy(final_buffer + ROWS * COLS * CHANNELS + sizeof(long long), &f->sequence_num, sizeof(long long));
+
+    ssize_t bytes_sent = sendto(c.socket, final_buffer, sizeof(final_buffer), 0,
+                                (struct sockaddr *)&peer_address, sizeof(peer_address));
 }
 
-void send_data(int socket)
+void send_data(const channel &c)
 {
-    // pen the default camera (ID 0)
+    // open the default camera (ID 0)
     cv::VideoCapture cap(0);
     if (!cap.isOpened())
     {
         std::cerr << "error: could not open camera!" << std::endl;
         return;
     }
+    long long sequence_num = 0;
     while (true)
     {
         cv::Mat raw_frame;
@@ -208,11 +168,16 @@ void send_data(int socket)
         // flip the frame horizontally (mirror effect).
         cv::Mat processed_frame;
         cv::flip(raw_frame, processed_frame, 1); // 1 means horizontal flip.
+        cv::Mat resized_processed_frame;
+        cv::resize(processed_frame, resized_processed_frame, cv::Size(COLS, ROWS), 0, 0, cv::INTER_LINEAR);
 
-        // convert the frame to raw pixel data.
-        unsigned char *raw_data = processed_frame.data;
-
-        send_frame(socket, raw_data, timenow_ms());
+        // convert the frame to raw pixel data and send.
+        unsigned char *raw_data = resized_processed_frame.data;
+        frame f = {};
+        memcpy(f.raw_data, raw_data, ROWS * COLS * CHANNELS);
+        f.timestamp = timenow_ms();
+        f.sequence_num = sequence_num;
+        send_frame(c, &f);
 
         // wait for 10 milliseconds and check if 'q' key was pressed
         if (cv::waitKey(100) == 'q')
@@ -220,6 +185,7 @@ void send_data(int socket)
             std::cout << "exiting..." << std::endl;
             break;
         }
+        ++sequence_num;
     }
     // release the camera and close the window
     cap.release();
@@ -233,20 +199,18 @@ int main(int argc, char *argv[])
         return 1;
     }
     // Retrieve the IP address and connection mode.
-    const char *ip_address = argv[1];
-    const char *connection_mode = argv[2];
-    bool is_sending_connection_request = (strcmp(connection_mode, "S") == 0);
-    std::cout << "connection_mode: " << is_sending_connection_request << std::endl;
-    int send_socket = create_send_socket(ip_address, is_sending_connection_request);
-    int receive_socket = create_receive_socket(ip_address, is_sending_connection_request);
-    if (send_socket != 1 && receive_socket != 1)
+    const char *peer_ip_address = argv[1];
+    bool use_low_port_for_sending = (strcmp(argv[2], "Y") == 0);
+    channel sending_channel = create_send_socket(peer_ip_address, use_low_port_for_sending);
+    channel receiving_channel = create_receive_socket(peer_ip_address, use_low_port_for_sending);
+    if (sending_channel.socket != -1 && receiving_channel.socket != -1)
     {
-        // std::thread send_thread(send_data, send_socket);
-        receive_data(receive_socket);
-        // send_thread.join();
+        std::thread send_thread(send_data, sending_channel);
+        // std::thread receive_thread(receive_data, receiving_channel);
+        send_thread.join();
         // receive_thread.join();
     }
-    close(send_socket);
-    close(receive_socket);
+    close_channel(sending_channel);
+    close_channel(receiving_channel);
     return 0;
 }

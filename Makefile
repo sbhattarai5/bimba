@@ -2,8 +2,8 @@
 CXX = g++
 CXXFLAGS = -std=c++11
 OPENCV_FLAGS = `pkg-config --cflags --libs opencv4`
-IP_ADDRESS = 67.148.61.26
-CONNECTION_MODE = S
+PEER_IP_ADDRESS = 67.148.61.26
+USE_LOW_PORT_FOR_SENDING = Y
 
 # Source and target
 SRC = main.cpp
@@ -15,7 +15,7 @@ all:
 
 # Run the program
 run: all
-	./$(TARGET) $(IP_ADDRESS) $(CONNECTION_MODE)
+	./$(TARGET) $(PEER_IP_ADDRESS) $(USE_LOW_PORT_FOR_SENDING)
 
 # Clean up
 clean:
