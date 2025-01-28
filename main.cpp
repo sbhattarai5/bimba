@@ -53,6 +53,7 @@ int create_socket(const char *ip_address, int port_number, bool is_sending_conne
             close(sockfd);
             return 1;
         }
+        std::cout << "connected!" << std::endl;
         return sockfd;
     }
     else
