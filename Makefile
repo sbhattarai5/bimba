@@ -2,7 +2,7 @@
 CXX = g++
 CXXFLAGS = -std=c++11
 OPENCV_FLAGS = `pkg-config --cflags --libs opencv4`
-IP_ADDRESS = 127.0.0.1
+IP_ADDRESS = 67.148.61.26
 CONNECTION_MODE = S
 
 # Source and target
