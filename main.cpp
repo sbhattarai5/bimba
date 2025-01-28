@@ -118,6 +118,7 @@ bool should_drop_frame(long long &frame_timestamp)
 
 void receive_data(int socket)
 {
+    std::cout << "started receiveing: " << std::endl;
     // create a window
     cv::namedWindow("bimba", cv::WINDOW_NORMAL);
     unsigned char raw_data[ROWS * COLS * CHANNELS];
@@ -145,16 +146,18 @@ void receive_data(int socket)
         // check if received frame is delayed more than the threshold.
         if (should_drop_frame(timestamp))
         {
+            std::cout << "dropped!" << std::endl;
             continue;
         }
 
+        std::cout << "not dropped!" << std::endl;
         cv::Mat received_frame(ROWS, COLS, CV_8UC3, (void *)raw_data);
 
         // display the frame.
         cv::imshow("bimba", received_frame);
 
         // wait for 10 milliseconds and check if 'q' key was pressed
-        if (cv::waitKey(5) == 'q')
+        if (cv::waitKey(10) == 'q')
         {
             std::cout << "exiting..." << std::endl;
             break;
@@ -233,6 +236,7 @@ int main(int argc, char *argv[])
     std::cout << "connection_mode: " << is_sending_connection_request << std::endl;
     int send_socket = create_send_socket(ip_address, is_sending_connection_request);
     int receive_socket = create_receive_socket(ip_address, is_sending_connection_request);
+   std::cout << send_socket << " " << receive_socket << std::endl;
     if (send_socket != 1 && receive_socket != 1)
     {
         std::thread send_thread(send_data, send_socket);
