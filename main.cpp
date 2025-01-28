@@ -6,13 +6,19 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-#define ROWS 1080
-#define COLS 1920
+#define ROWS 280
+#define COLS 360
 #define CHANNELS 3 // RGB.
 #define PORT1 50001
 #define PORT2 50002
 #define IP "127.0.0.1"
 #define ACCEPTABLE_DELAY_IN_MS 100
+
+struct frame {
+    const unsigned char raw_data[ROWS * COLS * CHANNELS];
+    long long timestamp;
+    long long sequence_num;
+};
 
 long long timenow_ms()
 {
@@ -121,27 +127,24 @@ void receive_data(int socket)
     std::cout << "started receiveing: " << std::endl;
     // create a window
     cv::namedWindow("bimba", cv::WINDOW_NORMAL);
-    unsigned char raw_data[ROWS * COLS * CHANNELS];
+    size_t raw_data_size = 13;
+    size_t raw_data_received = 0;
+    size_t receive_chunk = 5000;
+    unsigned char raw_data[raw_data_size];
     long long timestamp;
+    std::cout << "initialized!..." << std::endl;
 
     while (1)
     {
         // receive raw data.
-        ssize_t bytes_received_1 = recv(socket, &raw_data, sizeof(ROWS * COLS * CHANNELS), 0);
+        while (raw_data_received < raw_data_size)
+        {
+            size_t chunk_size = (raw_data_received + receive_chunk) < raw_data_size ? receive_chunk : (raw_data_size - raw_data_received);
+            ssize_t bytes_received_1 = recv(socket, raw_data + raw_data_received, chunk_size, 0);
+            raw_data_received += bytes_received_1;
+        }
         // receive timestamp.
         ssize_t bytes_received_2 = recv(socket, &timestamp, sizeof(timestamp), 0);
-
-        // Check if data is received successfully
-        if (bytes_received_1 == -1 || bytes_received_2)
-        {
-            std::cerr << "error receiving data!" << std::endl;
-            return;
-        }
-        else if (bytes_received_1 == 0 || bytes_received_2)
-        {
-            std::cerr << "connection closed by the peer!" << std::endl;
-            return;
-        }
 
         // check if received frame is delayed more than the threshold.
         if (should_drop_frame(timestamp))
@@ -212,7 +215,7 @@ void send_data(int socket)
         send_frame(socket, raw_data, timenow_ms());
 
         // wait for 10 milliseconds and check if 'q' key was pressed
-        if (cv::waitKey(10) == 'q')
+        if (cv::waitKey(100) == 'q')
         {
             std::cout << "exiting..." << std::endl;
             break;
@@ -236,13 +239,12 @@ int main(int argc, char *argv[])
     std::cout << "connection_mode: " << is_sending_connection_request << std::endl;
     int send_socket = create_send_socket(ip_address, is_sending_connection_request);
     int receive_socket = create_receive_socket(ip_address, is_sending_connection_request);
-   std::cout << send_socket << " " << receive_socket << std::endl;
     if (send_socket != 1 && receive_socket != 1)
     {
-        std::thread send_thread(send_data, send_socket);
-        std::thread receive_thread(receive_data, receive_socket);
-        send_thread.join();
-        receive_thread.join();
+        // std::thread send_thread(send_data, send_socket);
+        receive_data(receive_socket);
+        // send_thread.join();
+        // receive_thread.join();
     }
     close(send_socket);
     close(receive_socket);
