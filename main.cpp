@@ -206,9 +206,8 @@ int main(int argc, char *argv[])
     if (sending_channel.socket != -1 && receiving_channel.socket != -1)
     {
         std::thread send_thread(send_data, sending_channel);
-        std::thread receive_thread(receive_data, receiving_channel);
+        receive_thread(receive_data, receiving_channel);
         send_thread.join();
-        receive_thread.join();
     }
     close_channel(sending_channel);
     close_channel(receiving_channel);
