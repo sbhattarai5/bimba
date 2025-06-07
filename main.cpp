@@ -205,9 +205,8 @@ int main(int argc, char *argv[])
     channel receiving_channel = create_receive_socket(peer_ip_address, use_low_port_for_sending);
     if (sending_channel.socket != -1 && receiving_channel.socket != -1)
     {
-        std::thread send_thread(send_data, sending_channel);
-        receive_data(receiving_channel);
-        send_thread.join();
+        // send_thread(sending_channel);
+        // receive_data(receiving_channel);
     }
     close_channel(sending_channel);
     close_channel(receiving_channel);
