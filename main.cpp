@@ -205,7 +205,7 @@ int main(int argc, char *argv[])
     channel receiving_channel = create_receive_socket(peer_ip_address, use_low_port_for_sending);
     if (sending_channel.socket != -1 && receiving_channel.socket != -1)
     {
-        // send_thread(sending_channel);
+        // send_data(sending_channel);
         // receive_data(receiving_channel);
     }
     close_channel(sending_channel);
